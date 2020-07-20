@@ -1,3 +1,7 @@
+# specifics to this project
+output/
+videos/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
