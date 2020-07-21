@@ -20,52 +20,48 @@ import imutils
 import time
 import dlib
 import cv2
+import threading
 
-# construct the argument parse and parse the arguments
-# ap = argparse.ArgumentParser()
-# ap.add_argument("-p", "--prototxt", required=True,
-# 	help="path to Caffe 'deploy' prototxt file")
-# ap.add_argument("-m", "--model", required=True,
-# 	help="path to Caffe pre-trained model")
-# ap.add_argument("-i", "--input", type=str,
-# 	help="path to optional input video file")
-# ap.add_argument("-o", "--output", type=str,
-# 	help="path to optional output video file")
-# ap.add_argument("-c", "--confidence", type=float, default=0.4,
-# 	help="minimum probability to filter weak detections")
-# ap.add_argument("-s", "--skip-frames", type=int, default=30,
-# 	help="# of skip frames between detections")
-# ap.add_argument("-d", "--direction", type=str, default="updown", 
-# 	help="up down counting or left right counting")
-# args = vars(ap.parse_args())
+
+# def incrementCount():
+# 	count += 1
+# def decrementCount():
+# 	count -= 1
 
 # initialize the list of class labels MobileNet SSD was trained to
 # detect
-class PeopleCounter():
+class PeopleCounter(threading.Thread):
 	CLASSES = ["background", "aeroplane", "bicycle", "bird", "boat",
 		"bottle", "bus", "car", "cat", "chair", "cow", "diningtable",
 		"dog", "horse", "motorbike", "person", "pottedplant", "sheep",
 		"sofa", "train", "tvmonitor"]
 	# default
 	# prototxt='mobilenet_ssd/MobileNetSSD_deploy.prototxt', model='mobilenet_ssd/MobileNetSSD_deploy.caffemodel', input=None
-	def __init__(self, **args):
-		
+	def __init__(self, threadID, name, **args):
+		self.count = 0
+		self.countChanged = True
+
+		threading.Thread.__init__(self)
+		self.threadID = threadID
+		self.name = name
+		self.args = args
 		# load our serialized model from disk
 		print("[INFO] loading model...")
-		net = cv2.dnn.readNetFromCaffe(args["prototxt"], args["model"])
+		self.net = cv2.dnn.readNetFromCaffe(self.args["prototxt"], self.args["model"])
 
 		# if a video path was not supplied, grab a reference to the webcam
-		if args["input"] == None:
+		if self.args["input"] == None:
 			print("[INFO] starting video stream...")
-			vs = VideoStream(src=0).start()
+			self.vs = VideoStream(src=0).start()
 			time.sleep(2.0)
 
 		# otherwise, grab a reference to the ip camera
 		else:
 			print("[INFO] opening ip camera feed...")
-			vs = VideoStream(args["input"]).start()
+			self.vs = VideoStream(self.args["input"]).start()
 			time.sleep(2.0)
-		
+	
+	def run(self):
 		# initialize the video writer (we'll instantiate later if need be)
 		writer = None
 
@@ -77,7 +73,9 @@ class PeopleCounter():
 		# instantiate our centroid tracker, then initialize a list to store
 		# each of our dlib correlation trackers, followed by a dictionary to
 		# map each unique object ID to a TrackableObject
-		ct = CentroidTracker(maxDisappeared=40, maxDistance=50)
+
+		# base max distance is 50
+		ct = CentroidTracker(maxDisappeared=40, maxDistance=100)
 		trackers = []
 		trackableObjects = {}
 
@@ -91,17 +89,21 @@ class PeopleCounter():
 
 		# start the frames per second throughput estimator
 		fps = FPS().start()
-
+		temp = 0
 		# loop over frames from the video stream
 		while True:
 			# grab the next frame and handle if we are reading from either
 			# VideoCapture or VideoStream
-			frame = vs.read()
-			#frame = frame[1] if args.get("input", False) else frame
+			frame = self.vs.read()
+			print(len(frame),len(frame[0]))
+			temp += 1
+			if temp == 10:
+				break
+			#frame = frame[1] if self.args.get("input", False) else frame
 
 			# if we are viewing a video and we did not grab a frame then we
 			# have reached the end of the video
-			# if args["input"] is not None and frame is None:
+			# if self.args["input"] is not None and frame is None:
 			# 	break
 			
 			# resize the frame to have a maximum width of 500 pixels (the
@@ -116,9 +118,9 @@ class PeopleCounter():
 
 			# if we are supposed to be writing a video to disk, initialize
 			# the writer
-			if args["output"] is not None and writer is None:
+			if self.args["output"] is not None and writer is None:
 				fourcc = cv2.VideoWriter_fourcc(*"MJPG")
-				writer = cv2.VideoWriter(args["output"], fourcc, 30,
+				writer = cv2.VideoWriter(self.args["output"], fourcc, 30,
 					(W, H), True)
 
 			# initialize the current status along with our list of bounding
@@ -129,7 +131,7 @@ class PeopleCounter():
 
 			# check to see if we should run a more computationally expensive
 			# object detection method to aid our tracker
-			if totalFrames % args["skip_frames"] == 0:
+			if totalFrames % self.args["skip_frames"] == 0:
 				# set the status and initialize our new set of object trackers
 				status = "Detecting"
 				trackers = []
@@ -137,8 +139,8 @@ class PeopleCounter():
 				# convert the frame to a blob and pass the blob through the
 				# network and obtain the detections
 				blob = cv2.dnn.blobFromImage(frame, 0.007843, (W, H), 127.5)
-				net.setInput(blob)
-				detections = net.forward()
+				self.net.setInput(blob)
+				detections = self.net.forward()
 
 				# loop over the detections
 				for i in np.arange(0, detections.shape[2]):
@@ -148,7 +150,7 @@ class PeopleCounter():
 
 					# filter out weak detections by requiring a minimum
 					# confidence
-					if confidence > args["confidence"]:
+					if confidence > self.args["confidence"]:
 						# extract the index of the class label from the
 						# detections list
 						idx = int(detections[0, 0, i, 1])
@@ -198,7 +200,7 @@ class PeopleCounter():
 			# draw a horizontal line in the center of the frame -- once an
 			# object crosses this line we will determine whether they were
 			# moving 'up' or 'down'
-			if args["direction"] == "rightleft":
+			if self.args["direction"] == "rightleft":
 				cv2.line(frame, (W // 2, 0), (W // 2, H), (0, 255, 255), 2)
 			else:
 				cv2.line(frame, (0, H // 2), (W, H // 2), (0, 255, 255), 2)
@@ -215,7 +217,7 @@ class PeopleCounter():
 
 				# if there is no existing trackable object, create one
 				if to is None:
-					if args["direction"] == "rightleft":
+					if self.args["direction"] == "rightleft":
 						if centroid[0] > W//2:
 							to = TrackableObject(objectID, centroid, "right")
 						else:
@@ -229,43 +231,25 @@ class PeopleCounter():
 				# otherwise, there is a trackable object so we can utilize it
 				# to determine direction
 				else:
-					# the difference between the x-coordinate of the *current*
-					# centroid and the mean of *previous* centroids will tell
-					# us in which direction the object is moving (negative for
-					# 'left' and positive for 'right')
-					if args["direction"] == "rightleft" and not to.counted:
+					if self.args["direction"] == "rightleft" and not to.counted:
 						#print("current: {} side: {}".format(str(centroid[0]), to.side))
 						if to.side == "right" and centroid[0] < W//2:
 							to.side = "left"
 							to.counted = True
 							totalLeft += 1
+							
+							self.count = self.count + 1 if self.args["enter_direction"] == "left" else self.count - 1
+							self.countChanged = True
+							# incrementCount() if self.args["enter_direction" == "left"] else decrementCount()
 						elif to.side == "left" and centroid[0] > W//2:
 							to.side = "right"
 							to.counted = True
 							totalRight += 1
 
-						# x = [c[0] for c in to.centroids]
-						# direction = centroid[0] - np.mean(x)
-						# to.centroids.append(centroid)
+							self.count = self.count + 1 if self.args["enter_direction"] == "right" else self.count - 1
+							self.countChanged = True
 
-						# print("current: {} direction: {}".format(str(centroid[0]), str(direction)))
-
-						# # check to see if the object has been counted or not
-						# if not to.counted:
-						# 	# if the direction is negative (indicating the object
-						# 	# is moving left) AND the centroid is left of the center
-						# 	# line, count the object
-						# 	if direction < 0 and centroid[0] < W // 2:
-						# 		totalLeft += 1
-						# 		to.counted = True
-
-						# 	# if the direction is positive (indicating the object
-						# 	# is moving right) AND the centroid is right of the
-						# 	# center line, count the object
-						# 	elif direction > 0 and centroid[0] > W // 2:
-						# 		totalRight += 1
-						# 		to.counted = True
-					elif args["direction"] == "updown" and not to.counted:
+					elif self.args["direction"] == "updown" and not to.counted:
 						#print("current: {} side: {}".format(str(centroid[0]), to.side))
 						if to.side == "up" and centroid[1] > H//2:
 							to.side = "down"
@@ -275,30 +259,6 @@ class PeopleCounter():
 							to.side = "up"
 							to.counted = True
 							totalUp += 1
-					# the difference between the y-coordinate of the *current*
-					# centroid and the mean of *previous* centroids will tell
-					# us in which direction the object is moving (negative for
-					# 'up' and positive for 'down')
-					# else:
-					# 	y = [c[1] for c in to.centroids]
-					# 	direction = centroid[1] - np.mean(y)
-					# 	to.centroids.append(centroid)
-
-					# 	# check to see if the object has been counted or not
-					# 	if not to.counted:
-					# 		# if the direction is negative (indicating the object
-					# 		# is moving up) AND the centroid is above the center
-					# 		# line, count the object
-					# 		if direction < 0 and centroid[1] < H // 2:
-					# 			totalUp += 1
-					# 			to.counted = True
-
-					# 		# if the direction is positive (indicating the object
-					# 		# is moving down) AND the centroid is below the
-					# 		# center line, count the object
-					# 		elif direction > 0 and centroid[1] > H // 2:
-					# 			totalDown += 1
-					# 			to.counted = True
 
 				# store the trackable object in our dictionary
 				trackableObjects[objectID] = to
@@ -312,7 +272,7 @@ class PeopleCounter():
 
 			# construct a tuple of information we will be displaying on the
 			# frame
-			if args["direction"] == "rightleft":
+			if self.args["direction"] == "rightleft":
 				info = [
 					("Left", totalLeft),
 					("Right", totalRight),
@@ -337,6 +297,7 @@ class PeopleCounter():
 
 			# show the output frame
 			cv2.imshow("Frame", frame)
+			# cv2.imwrite('output/pictests/test{}.jpg'.format(str(temp)), frame)
 			key = cv2.waitKey(1) & 0xFF
 
 			# if the `q` key was pressed, break from the loop
@@ -358,8 +319,8 @@ class PeopleCounter():
 			writer.release()
 
 		# if we are not using a video file, stop the camera video stream
-		# if not args.get("input", False):
-		vs.stop()
+		# if not self.args.get("input", False):
+		self.vs.stop()
 
 		# otherwise, release the video file pointer
 		# else:
@@ -369,18 +330,54 @@ class PeopleCounter():
 		cv2.destroyAllWindows()
 
 if __name__=="__main__":
-	# args = {"prototxt": "mobilenet_ssd/MobileNetSSD_deploy.prototxt", 
+	# self.args = {"prototxt": "mobilenet_ssd/MobileNetSSD_deploy.prototxt", 
 	# 	"model": "mobilenet_ssd/MobileNetSSD_deploy.caffemodel",
 	# 	"input": "http://admin:750801@98.199.131.202/videostream.cgi?rate=0"
 	# 	"confidence": 0.4
 	# 	"skip-frames": 30
 	# 	"direction": "updown"
 	# }
-	PeopleCounter(prototxt='mobilenet_ssd/MobileNetSSD_deploy.prototxt', 
-		model='mobilenet_ssd/MobileNetSSD_deploy.caffemodel', 
-		input='http://admin:750801@98.199.131.202/videostream.cgi?rate=0', 
-		output=None,
-		confidence=0.4, 
-		skip_frames=30, 
-		direction="updown"
-	)
+
+	try:
+		home_counter = PeopleCounter(threadID=1, name="home_cam",prototxt='mobilenet_ssd/MobileNetSSD_deploy.prototxt', 
+			model='mobilenet_ssd/MobileNetSSD_deploy.caffemodel', 
+			input='http://admin:750801@98.199.131.202/videostream.cgi?rate=0', 
+			output=None,
+			confidence=0.4, 
+			skip_frames=30, 
+			direction="rightleft",
+			enter_direction="right"
+		)
+		# beach_counter = PeopleCounter(threadID=2, name="beach_cam",prototxt='mobilenet_ssd/MobileNetSSD_deploy.prototxt', 
+		# 	model='mobilenet_ssd/MobileNetSSD_deploy.caffemodel', 
+		# 	input='http://213.34.225.97:8080/mjpg/video.mjpg', 
+		# 	output=None,
+		# 	confidence=0.4, 
+		# 	skip_frames=30, 
+		# 	direction="rightleft"
+		# )
+
+		home_counter.start()
+		# beach_counter.start()
+	except AttributeError as e:
+		print("Video stream is invalid or offline. ")
+	except Exception as e:
+		print("An unknown error occurred opening the video streams. ")
+		print(e)
+
+	while home_counter.is_alive():
+		if home_counter.countChanged:
+			print(home_counter.count)
+			home_counter.countChanged = False
+	
+	print("Exiting main thread")
+	
+	# vs = cv2.VideoCapture("asd")
+	# if not vs.isOpened():
+	# 	print("Video stream is invalid or offline")
+		
+	
+	# try:
+	# 	vs = VideoStream("asd").start()
+	# except:
+	# 	print("Video stream is invalid or offline")
